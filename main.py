@@ -1,4 +1,5 @@
 import argparse
+from time import sleep
 
 import dns.message
 import dns.name
@@ -6,6 +7,9 @@ import dns.query
 import dns.rdata
 import dns.rdataclass
 import dns.rdatatype
+from dnslib import RR, QTYPE, A, AAAA
+from dnslib.server import DNSServer, BaseResolver, DNSLogger
+
 
 FORMATS = [("A", "{name} has address {address}"),
            ("AAAA", "{name} has IPv6 address {address}")]
@@ -99,6 +103,10 @@ def find_recursive(target_name: dns.name.Name,
     response = make_request(target_name, qtype, ipAddr)
     if response:
         if response.answer:
+            for answer in response.answer:
+                if answer.rdtype == 5 and qtype != 5:
+                    target_name = dns.name.from_text(str(answer[0]))
+                    return find(target_name, qtype)
             return response
         elif response.additional:
             for additional in response.additional:
@@ -118,17 +126,33 @@ def print_results(results: dict) -> None:
             print(fmt_str.format(**result))
 
 
+class DNSResolver(BaseResolver):
+
+    def resolve(self, request, handler):
+        reply = request.reply()
+        qname = request.q.qname
+        result = get_results(str(qname))
+        ipv4 = result["A"]
+        ipv6 = result["AAAA"]
+        for elem in ipv4:
+            reply.add_answer(RR(qname, QTYPE.A, rdata=A(elem["address"]), ttl=60))
+        for elem in ipv6:
+            reply.add_answer(RR(qname, QTYPE.AAAA, rdata=AAAA(elem["address"]), ttl=60))
+        print(qname)
+        print(get_results(str(qname)))
+        return reply
+
+
 def main():
-    argument_parser = argparse.ArgumentParser()
-    argument_parser.add_argument("name", nargs="+",
-                                 help="DNS name(s) to look up")
+    resolver = DNSResolver()
+    udp_server = DNSServer(resolver, address="localhost")
+    udp_server.start_thread()
 
-    program_args = argument_parser.parse_args()
-    for a_domain_name in program_args.name:
-        result = get_results(a_domain_name)
-        if result != -1:
-            print_results(result)
-
+    try:
+        while udp_server.isAlive():
+            sleep(1)
+    except KeyboardInterrupt:
+        pass
 
 if __name__ == "__main__":
     main()
